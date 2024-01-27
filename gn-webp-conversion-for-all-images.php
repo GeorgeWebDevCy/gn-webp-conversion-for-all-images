@@ -60,4 +60,17 @@ function GNWEBPCONV() {
 	return Gn_Webp_Conversion_For_All_Images::instance();
 }
 
+
+/* 
+** When I activate the plugin, make sure woocommerce is active and installed
+** if not deactivate the plugin and show a notice
+*/
+function gnwebpconv_activation() {
+	if ( ! class_exists( 'WooCommerce' ) ) {
+		deactivate_plugins( plugin_basename( __FILE__ ) );
+		wp_die( __( 'Sorry, but this plugin requires the WooCommerce plugin to be installed and active.', 'gn-webp-conversion-for-all-images' ), 'gn-webp-conversion-for-all-images' );
+	}
+}
+register_activation_hook( __FILE__, 'gnwebpconv_activation' );
+
 GNWEBPCONV();
