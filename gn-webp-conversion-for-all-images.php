@@ -49,6 +49,18 @@ define( 'GNWEBPCONV_PLUGIN_URL',        plugin_dir_url( GNWEBPCONV_PLUGIN_FILE )
 require_once GNWEBPCONV_PLUGIN_DIR . 'core/class-gn-webp-conversion-for-all-images.php';
 
 /**
+ * shedule the cron job to do the conversion ecery 5 minutes use a plugin related prefix for the cron job
+ */
+function gnwebpconv_schedule_cron_job() {
+    if ( ! wp_next_scheduled( 'gnwebpconv_do_conversion' ) ) {
+        wp_schedule_event( time(), 'five_minutes', 'gnwebpconv_do_conversion' );
+    }
+}
+add_action( 'init', 'gnwebpconv_schedule_cron_job' );
+
+ 
+
+/**
  * The main function to load the only instance
  * of our master class.
  *
@@ -59,23 +71,6 @@ require_once GNWEBPCONV_PLUGIN_DIR . 'core/class-gn-webp-conversion-for-all-imag
 function GNWEBPCONV() {
     return Gn_Webp_Conversion_For_All_Images::instance();
 }
-
-/**
- * Define custom scheduling function
- */
-function gnwebpconv_schedule_cron() {
-    if ( ! wp_next_scheduled( 'gnwebpconv_do_conversion' ) ) {
-        // Schedule the cron job to run hourly
-        wp_schedule_event( time(), 'hourly', 'gnwebpconv_do_conversion' );
-        error_log('[GN WebP Conversion] Cron job scheduled successfully.');
-    }
-}
-
-// Hook activation to custom scheduling function
-register_activation_hook( __FILE__, 'gnwebpconv_schedule_cron' );
-
-
-
 /* 
 ** When I activate the plugin, make sure WooCommerce is active and installed
 ** if not deactivate the plugin and show a notice
@@ -88,14 +83,6 @@ function gnwebpconv_activation() {
 
     // Log plugin activation
     error_log('[GN WebP Conversion] Plugin activated.');
-
-    // Check if the cron job is scheduled
-    if ( ! wp_next_scheduled( 'gnwebpconv_do_conversion' ) ) {
-        // Schedule the cron job to run hourly
-        wp_schedule_event( time(), 'hourly', 'gnwebpconv_do_conversion' );
-        error_log('[GN WebP Conversion] Cron job scheduled successfully.'); // Plugin name added
-    }
-
     //make sure the plugin settings are set to the default values when the plugin is activated for the first time unless the user has changed them
     $gnwebpconv_settings = get_option( 'gnwebpconv_settings' );
     if ( false === $gnwebpconv_settings ) {
@@ -126,8 +113,6 @@ function gnwebpconv_activation() {
 
 register_activation_hook( __FILE__, 'gnwebpconv_activation' );
 
-// Register the conversion function with the cron job hook
-add_action( 'gnwebpconv_do_conversion', 'gnwebpconv_do_conversion' );
 
 
 /**
@@ -284,15 +269,6 @@ function gnwebpconv_do_conversion() {
         }
     }
 }
-add_action( 'gnwebpconv_do_conversion', 'gnwebpconv_do_conversion' );
-/**
- * Remove the cron job when the plugin is deactivated
- */
-function gnwebpconv_remove_cron_job() {
-    // Clear the scheduled hook for the conversion function
-    wp_clear_scheduled_hook( 'gnwebpconv_do_conversion' );
-}
-register_deactivation_hook( __FILE__, 'gnwebpconv_remove_cron_job' );
 
 /**
  * Add a notice to the admin dashboard to show the progress of the conversion
@@ -339,9 +315,6 @@ function gnwebpconv_admin_notice() {
 
     //check if the conversion is complete
     if ( $total_images === $converted_images ) {
-        //remove the cron job
-        wp_clear_scheduled_hook( 'gnwebpconv_do_conversion' );
-
         //remove the notice
         remove_action( 'admin_notices', 'gnwebpconv_admin_notice' );
     } else {
