@@ -60,6 +60,22 @@ function GNWEBPCONV() {
     return Gn_Webp_Conversion_For_All_Images::instance();
 }
 
+/**
+ * Define custom scheduling function
+ */
+function gnwebpconv_schedule_cron() {
+    if ( ! wp_next_scheduled( 'gnwebpconv_do_conversion' ) ) {
+        // Schedule the cron job to run hourly
+        wp_schedule_event( time(), 'hourly', 'gnwebpconv_do_conversion' );
+        error_log('[GN WebP Conversion] Cron job scheduled successfully.');
+    }
+}
+
+// Hook activation to custom scheduling function
+register_activation_hook( __FILE__, 'gnwebpconv_schedule_cron' );
+
+
+
 /* 
 ** When I activate the plugin, make sure WooCommerce is active and installed
 ** if not deactivate the plugin and show a notice
@@ -69,7 +85,17 @@ function gnwebpconv_activation() {
         deactivate_plugins( plugin_basename( __FILE__ ) );
         wp_die( __( 'Sorry, but this plugin requires the WooCommerce plugin to be installed and active.', 'gn-webp-conversion-for-all-images' ), 'gn-webp-conversion-for-all-images' );
     }
-    
+
+    // Log plugin activation
+    error_log('[GN WebP Conversion] Plugin activated.');
+
+    // Check if the cron job is scheduled
+    if ( ! wp_next_scheduled( 'gnwebpconv_do_conversion' ) ) {
+        // Schedule the cron job to run hourly
+        wp_schedule_event( time(), 'hourly', 'gnwebpconv_do_conversion' );
+        error_log('[GN WebP Conversion] Cron job scheduled successfully.'); // Plugin name added
+    }
+
     //make sure the plugin settings are set to the default values when the plugin is activated for the first time unless the user has changed them
     $gnwebpconv_settings = get_option( 'gnwebpconv_settings' );
     if ( false === $gnwebpconv_settings ) {
@@ -77,8 +103,8 @@ function gnwebpconv_activation() {
             'gnwebpconv_quality' => 80,
             'gnwebpconv_library' => 'gd',
         );
+        update_option( 'gnwebpconv_settings', $gnwebpconv_settings );
     }
-    update_option( 'gnwebpconv_settings', $gnwebpconv_settings );
 
     // Check if the GD or magick library is installed and activate the one that is installed by default the GD library should be activated first if both are installed
     if ( extension_loaded( 'gd' ) ) {
@@ -95,10 +121,14 @@ function gnwebpconv_activation() {
         deactivate_plugins( plugin_basename( __FILE__ ) );
         wp_die( __( 'Sorry, but this plugin requires the GD or Imagick library to be installed and active.', 'gn-webp-conversion-for-all-images' ), 'gn-webp-conversion-for-all-images' );
     }
-	 // Register the cron job
-	 gnwebpconv_add_cron_job();
 }
+
+
 register_activation_hook( __FILE__, 'gnwebpconv_activation' );
+
+// Register the conversion function with the cron job hook
+add_action( 'gnwebpconv_do_conversion', 'gnwebpconv_do_conversion' );
+
 
 /**
  * Create an admin page for the plugin
@@ -255,18 +285,6 @@ function gnwebpconv_do_conversion() {
     }
 }
 add_action( 'gnwebpconv_do_conversion', 'gnwebpconv_do_conversion' );
-
-/**
- * Add a cron job to do the conversion
- */
-function gnwebpconv_add_cron_job() {
-    if ( ! wp_next_scheduled( 'gnwebpconv_do_conversion' ) ) {
-        // Schedule the cron job to run hourly
-        wp_schedule_event( time(), 'hourly', 'gnwebpconv_do_conversion' );
-    }
-}
-add_action( 'init', 'gnwebpconv_add_cron_job' );
-
 /**
  * Remove the cron job when the plugin is deactivated
  */
