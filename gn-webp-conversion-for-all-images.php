@@ -405,4 +405,3 @@ function gnwebpconv_do_conversion()
 }
 add_action('gnwebpconv_do_conversion', 'gnwebpconv_do_conversion');
 ?>
-;saklksl
