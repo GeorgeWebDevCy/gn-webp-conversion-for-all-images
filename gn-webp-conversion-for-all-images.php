@@ -200,4 +200,199 @@ function gnwebpconv_settings_sanitize($input)
 // Add a link to the settings page to the plugins page
 function gnwebpconv_settings_link($links)
 {
-    $settings_link = '<a href="options-general.php?page=gnwebpconv
+    $settings_link = '<a href="options-general.php?page=gnwebpconv">' . __('Settings', 'gn-webp-conversion-for-all-images') . '</a>';
+    array_push($links, $settings_link);
+    return $links;
+}
+add_filter('plugin_action_links_' . plugin_basename(__FILE__), 'gnwebpconv_settings_link');
+
+// Log messages to the plugin log file
+function gnwebpconv_log($message)
+{
+    if (!file_exists(dirname(GNWEBPCONV_LOG_FILE))) {
+        mkdir(dirname(GNWEBPCONV_LOG_FILE), 0755, true);
+    }
+    $timestamp = current_time('mysql');
+    $log_entry = sprintf("[%s] %s\n", $timestamp, $message);
+    file_put_contents(GNWEBPCONV_LOG_FILE, $log_entry, FILE_APPEND);
+}
+
+// Recursively scan directories for images
+function gnwebpconv_scan_directory($directory)
+{
+    $images = array();
+    $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory));
+    foreach ($files as $file) {
+        if (in_array(strtolower($file->getExtension()), array('jpg', 'jpeg', 'png'))) {
+            $images[] = $file->getPathname();
+        }
+    }
+    return $images;
+}
+
+// Update image references in the database using find and replace
+function gnwebpconv_update_image_references($old_url, $new_url)
+{
+    global $wpdb;
+
+    gnwebpconv_log("Updating image references in the database from $old_url to $new_url");
+
+    $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
+    foreach ($tables as $table) {
+        $table_name = $table[0];
+        $columns = $wpdb->get_results("SHOW COLUMNS FROM $table_name", ARRAY_N);
+        foreach ($columns as $column) {
+            $column_name = $column[0];
+            $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT * FROM $table_name WHERE $column_name LIKE %s",
+                    '%' . $wpdb->esc_like($old_url) . '%'
+                ),
+                ARRAY_A
+            );
+
+            foreach ($rows as $row) {
+                $value = $row[$column_name];
+                if (is_serialized($value)) {
+                    $unserialized = @unserialize($value);
+                    if ($unserialized !== false) {
+                        $replaced = gnwebpconv_recursive_replace($old_url, $new_url, $unserialized);
+                        $new_value = serialize($replaced);
+                        if ($new_value !== $value) {
+                            $wpdb->update(
+                                $table_name,
+                                array($column_name => $new_value),
+                                array('ID' => $row['ID'])
+                            );
+                        }
+                    }
+                } else {
+                    $new_value = str_replace($old_url, $new_url, $value);
+                    if ($new_value !== $value) {
+                        $wpdb->update(
+                            $table_name,
+                            array($column_name => $new_value),
+                            array('ID' => $row['ID'])
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+function gnwebpconv_recursive_replace($find, $replace, $data)
+{
+    if (is_array($data)) {
+        foreach ($data as $key => $value) {
+            $data[$key] = gnwebpconv_recursive_replace($find, $replace, $value);
+        }
+    } elseif (is_string($data)) {
+        $data = str_replace($find, $replace, $data);
+    }
+    return $data;
+}
+
+// Do the conversion based on the settings the user has chosen
+function gnwebpconv_do_conversion()
+{
+    gnwebpconv_log('Starting conversion process.');
+
+    $gnwebpconv_settings = get_option('gnwebpconv_settings');
+    $gnwebpconv_quality = isset($gnwebpconv_settings['gnwebpconv_quality']) ? $gnwebpconv_settings['gnwebpconv_quality'] : 80;
+    $gnwebpconv_library = isset($gnwebpconv_settings['gnwebpconv_library']) ? $gnwebpconv_settings['gnwebpconv_library'] : 'gd';
+    $preserve_original = isset($gnwebpconv_settings['gnwebpconv_preserve_original']) ? $gnwebpconv_settings['gnwebpconv_preserve_original'] : 1;
+
+    $uploads_dir = wp_get_upload_dir()['basedir'];
+    $images = gnwebpconv_scan_directory($uploads_dir);
+
+    gnwebpconv_log('Found ' . count($images) . ' images to process.');
+
+    foreach ($images as $image_path) {
+        gnwebpconv_log('Processing image: ' . $image_path);
+
+        $image_extension = strtolower(pathinfo($image_path, PATHINFO_EXTENSION));
+        $webp_path = $image_path . '.webp';
+        $relative_image_path = str_replace($uploads_dir, '', $image_path);
+        $old_url = wp_get_upload_dir()['baseurl'] . $relative_image_path;
+        $new_url = $old_url . '.webp';
+
+        if (in_array($image_extension, ['jpg', 'jpeg', 'png']) && !file_exists($webp_path)) {
+            gnwebpconv_log('Converting image: ' . $image_path);
+
+            if ($gnwebpconv_library === 'gd') {
+                if ($image_extension === 'jpg' || $image_extension === 'jpeg') {
+                    $gd_image = imagecreatefromjpeg($image_path);
+                } elseif ($image_extension === 'png') {
+                    $gd_image = imagecreatefrompng($image_path);
+                }
+                imagewebp($gd_image, $webp_path, $gnwebpconv_quality);
+                imagedestroy($gd_image);
+            } elseif ($gnwebpconv_library === 'imagick') {
+                $imagick_image = new Imagick($image_path);
+                $imagick_image->setImageFormat('webp');
+                $imagick_image->setImageCompressionQuality($gnwebpconv_quality);
+                $imagick_image->writeImage($webp_path);
+                $imagick_image->clear();
+                $imagick_image->destroy();
+            }
+
+            // Update attachment metadata if this image is an attachment
+            $attachment_id = attachment_url_to_postid($old_url);
+            if ($attachment_id) {
+                $attachment_meta = wp_get_attachment_metadata($attachment_id);
+
+                foreach ($attachment_meta['sizes'] as $size => $size_info) {
+                    $size_path = dirname($image_path) . '/' . $size_info['file'];
+                    $size_webp_path = $size_path . '.webp';
+
+                    if (!file_exists($size_webp_path)) {
+                        if ($gnwebpconv_library === 'gd') {
+                            if ($image_extension === 'jpg' || $image_extension === 'jpeg') {
+                                $gd_image = imagecreatefromjpeg($size_path);
+                            } elseif ($image_extension === 'png') {
+                                $gd_image = imagecreatefrompng($size_path);
+                            }
+                            imagewebp($gd_image, $size_webp_path, $gnwebpconv_quality);
+                            imagedestroy($gd_image);
+                        } elseif ($gnwebpconv_library === 'imagick') {
+                            $imagick_image = new Imagick($size_path);
+                            $imagick_image->setImageFormat('webp');
+                            $imagick_image->setImageCompressionQuality($gnwebpconv_quality);
+                            $imagick_image->writeImage($size_webp_path);
+                            $imagick_image->clear();
+                            $imagick_image->destroy();
+                        }
+                    }
+
+                    $attachment_meta['sizes'][$size]['webp'] = array(
+                        'file' => basename($size_webp_path),
+                        'width' => $size_info['width'],
+                        'height' => $size_info['height'],
+                        'mime-type' => 'image/webp',
+                    );
+                }
+
+                wp_update_attachment_metadata($attachment_id, $attachment_meta);
+            }
+
+            // Update references in the database
+            gnwebpconv_update_image_references($old_url, $new_url);
+
+            if (!$preserve_original) {
+                gnwebpconv_log('Deleting original image: ' . $image_path);
+                unlink($image_path);
+
+                foreach ($attachment_meta['sizes'] as $size_info) {
+                    $size_path = dirname($image_path) . '/' . $size_info['file'];
+                    if (file_exists($size_path)) {
+                        gnwebpconv_log('Deleting original size image: ' . $size_path);
+                        unlink($size_path);
+                    }
+                }
+            }
+        }
+    }
+}
+add_action('gnwebpconv_do_conversion', 'gnwebpconv_do_conversion');
+?>
