@@ -337,79 +337,17 @@ function gnwebpconv_do_conversion()
                 $imagick_image->destroy();
             }
 
-            // Update attachment metadata if this image is an attachment
-            $attachment_id = attachment_url_to_postid($old_url);
-            if ($attachment_id) {
-                $attachment_meta = wp_get_attachment_metadata($attachment_id);
+            $attachment_meta = wp_get_attachment_metadata($image->ID);
+            $attachment_meta['sizes']['webp'] = array(
+                'file'      => basename($image_path . '.webp'),
+                'width'     => $attachment_meta['width'],
+                'height'    => $attachment_meta['height'],
+                'mime-type' => 'image/webp',
+            );
+            wp_update_attachment_metadata($image->ID, $attachment_meta);
 
-                foreach ($attachment_meta['sizes'] as $size => $size_info) {
-                    $size_path = dirname($image_path) . '/' . $size_info['file'];
-                    $size_webp_path = $size_path . '.webp';
-
-                    if (!file_exists($size_webp_path)) {
-                        if ($gnwebpconv_library === 'gd') {
-                            if ($image_extension === 'jpg' || $image_extension === 'jpeg') {
-                                $gd_image = imagecreatefromjpeg($size_path);
-                            } elseif ($image_extension === 'png') {
-                                $gd_image = imagecreatefrompng($size_path);
-                            }
-                            imagewebp($gd_image, $size_webp_path, $gnwebpconv_quality);
-                            imagedestroy($gd_image);
-                        } elseif ($gnwebpconv_library === 'imagick') {
-                            $imagick_image = new Imagick($size_path);
-                            $imagick_image->setImageFormat('webp');
-                            $imagick_image->setImageCompressionQuality($gnwebpconv_quality);
-                            $imagick_image->writeImage($size_webp_path);
-                            $imagick_image->clear();
-                            $imagick_image->destroy();
-                        }
-                    }
-
-                    $attachment_meta['sizes'][$size]['webp'] = array(
-                        'file' => basename($size_webp_path),
-                        'width' => $size_info['width'],
-                        'height' => $size_info['height'],
-                        'mime-type' => 'image/webp',
-                    );
-                }
-
-                wp_update_attachment_metadata($attachment_id, $attachment_meta);
-            }
-
-            // Update references in the database
-            gnwebpconv_update_image_references($old_url, $new_url);
-
-            // Update post content to reference the new URL
-            gnwebpconv_update_post_content($old_url, $new_url);
-
-            if (!$preserve_original) {
-                gnwebpconv_log('Deleting original image: ' . $image_path);
-                unlink($image_path);
-
-                foreach ($attachment_meta['sizes'] as $size_info) {
-                    $size_path = dirname($image_path) . '/' . $size_info['file'];
-                    if (file_exists($size_path)) {
-                        gnwebpconv_log('Deleting original size image: ' . $size_path);
-                        unlink($size_path);
-                    }
-                }
-            }
+            unlink($image_path);
         }
     }
 }
 add_action('gnwebpconv_do_conversion', 'gnwebpconv_do_conversion');
-
-function gnwebpconv_update_post_content($old_url, $new_url)
-{
-    global $wpdb;
-
-    $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE {$wpdb->posts} SET post_content = REPLACE(post_content, %s, %s)",
-            $old_url,
-            $new_url
-        )
-    );
-}
-
-?>
