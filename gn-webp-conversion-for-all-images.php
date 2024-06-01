@@ -206,178 +206,11 @@ function gnwebpconv_settings_link($links)
 }
 add_filter('plugin_action_links_' . plugin_basename(__FILE__), 'gnwebpconv_settings_link');
 
-// Log messages to the plugin log file
-function gnwebpconv_log($message)
-{
-    if (!file_exists(dirname(GNWEBPCONV_LOG_FILE))) {
-        mkdir(dirname(GNWEBPCONV_LOG_FILE), 0755, true);
-    }
-    $timestamp = current_time('mysql');
-    $log_entry = sprintf("[%s] %s\n", $timestamp, $message);
-    file_put_contents(GNWEBPCONV_LOG_FILE, $log_entry, FILE_APPEND);
-}
-
-// Recursively scan directories for images
-function gnwebpconv_scan_directory($directory)
-{
-    $images = array();
-    $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory));
-    foreach ($files as $file) {
-        if (in_array(strtolower($file->getExtension()), array('jpg', 'jpeg', 'png'))) {
-            $images[] = $file->getPathname();
-        }
-    }
-    return $images;
-}
-
-// Update image references in the database using find and replace
-function gnwebpconv_update_image_references($old_url, $new_url)
-{
-    global $wpdb;
-
-    gnwebpconv_log("Updating image references in the database from $old_url to $new_url");
-
-    // Update wp_posts table
-    $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE {$wpdb->posts} SET post_content = REPLACE(post_content, %s, %s) WHERE post_content REGEXP %s",
-            $old_url,
-            $new_url,
-            $wpdb->esc_like($old_url)
-        )
-    );
-    $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE {$wpdb->posts} SET guid = REPLACE(guid, %s, %s) WHERE guid REGEXP %s",
-            $old_url,
-            $new_url,
-            $wpdb->esc_like($old_url)
-        )
-    );
-
-    // Update wp_postmeta table
-    $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE {$wpdb->postmeta} SET meta_value = REPLACE(meta_value, %s, %s) WHERE meta_value REGEXP %s",
-            $old_url,
-            $new_url,
-            $wpdb->esc_like($old_url)
-        )
-    );
-
-    // Update wp_pmxi_images table (used by WP All Import)
-    if ($wpdb->get_var("SHOW TABLES LIKE '{$wpdb->prefix}pmxi_images'") == "{$wpdb->prefix}pmxi_images") {
-        $wpdb->query(
-            $wpdb->prepare(
-                "UPDATE {$wpdb->prefix}pmxi_images SET image_url = REPLACE(image_url, %s, %s) WHERE image_url REGEXP %s",
-                $old_url,
-                $new_url,
-                $wpdb->esc_like($old_url)
-            )
-        );
-        $wpdb->query(
-            $wpdb->prepare(
-                "UPDATE {$wpdb->prefix}pmxi_images SET image_filename = REPLACE(image_filename, %s, %s) WHERE image_filename REGEXP %s",
-                basename($old_url),
-                basename($new_url),
-                $wpdb->esc_like(basename($old_url))
-            )
-        );
-    }
-
-    // Update wp_options table
-    $options_updated = $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE {$wpdb->options} SET option_value = REPLACE(option_value, %s, %s) WHERE option_value REGEXP %s",
-            $old_url,
-            $new_url,
-            $wpdb->esc_like($old_url)
-        )
-    );
-    gnwebpconv_log("Updated $options_updated options");
-
-    // Update widgets
-    $widgets_updated = $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE {$wpdb->options} SET option_value = REPLACE(option_value, %s, %s) WHERE option_name LIKE 'widget_%%' AND option_value REGEXP %s",
-            $old_url,
-            $new_url,
-            $wpdb->esc_like($old_url)
-        )
-    );
-    gnwebpconv_log("Updated $widgets_updated widgets");
-
-    // WooCommerce specific updates
-    gnwebpconv_update_woocommerce_data($old_url, $new_url);
-}
-
-// WooCommerce specific replacements
-function gnwebpconv_update_woocommerce_data($old_url, $new_url)
-{
-    global $wpdb;
-
-    gnwebpconv_log("Updating WooCommerce data from $old_url to $new_url");
-
-    // Update product meta
-    $meta_updated = $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE {$wpdb->postmeta} SET meta_value = REPLACE(meta_value, %s, %s) WHERE meta_key LIKE '_wp_attached_file' OR meta_key LIKE '_thumbnail_id' AND meta_value REGEXP %s",
-            $old_url,
-            $new_url,
-            $wpdb->esc_like($old_url)
-        )
-    );
-    gnwebpconv_log("Updated $meta_updated product meta entries");
-
-    // Update any other custom fields used by WooCommerce
-    $custom_meta_keys = ['_product_image_gallery', '_product_image_thumbnail', '_product_image', '_product_gallery'];
-    foreach ($custom_meta_keys as $meta_key) {
-        $meta_updated = $wpdb->query(
-            $wpdb->prepare(
-                "UPDATE {$wpdb->postmeta} SET meta_value = REPLACE(meta_value, %s, %s) WHERE meta_key = %s AND meta_value REGEXP %s",
-                $old_url,
-                $new_url,
-                $meta_key,
-                $wpdb->esc_like($old_url)
-            )
-        );
-        gnwebpconv_log("Updated $meta_updated entries for $meta_key");
-    }
-}
-
-// Comprehensive database-wide search and replace for image extensions
-function gnwebpconv_database_search_replace()
-{
-    global $wpdb;
-
-    gnwebpconv_log('Starting comprehensive database search and replace.');
-
-    // Get all tables
-    $tables = $wpdb->get_results("SHOW TABLES", ARRAY_N);
-
-    // Loop through each table
-    foreach ($tables as $table) {
-        $table_name = $table[0];
-        $columns = $wpdb->get_results("SHOW COLUMNS FROM $table_name", ARRAY_A);
-
-        // Loop through each column
-        foreach ($columns as $column) {
-            $column_name = $column['Field'];
-
-            // Perform search and replace for image extensions
-            $wpdb->query(
-                "UPDATE $table_name SET $column_name = REGEXP_REPLACE($column_name, '\\.(jpg|jpeg|png)(?!\\w)', '.webp')"
-            );
-        }
-    }
-
-    gnwebpconv_log('Completed comprehensive database search and replace.');
-}
-
-// Do the conversion based on the settings the user has chosen
-function gnwebpconv_do_conversion()
-{
-    gnwebpconv_log('Starting conversion process.');
+/**
+ * Do the conversion based on the settings the user has chosen
+ */
+function gnwebpconv_do_conversion() {
+    error_log('[GN WebP Conversion] Starting conversion process.');
 
     $gnwebpconv_settings = get_option('gnwebpconv_settings');
     $gnwebpconv_quality = isset($gnwebpconv_settings['gnwebpconv_quality']) ? $gnwebpconv_settings['gnwebpconv_quality'] : 80;
@@ -393,10 +226,6 @@ function gnwebpconv_do_conversion()
         gnwebpconv_log('Processing image: ' . $image_path);
 
         $image_extension = strtolower(pathinfo($image_path, PATHINFO_EXTENSION));
-        $webp_path = preg_replace('/\.(jpg|jpeg|png)$/i', '.webp', $image_path);
-        $relative_image_path = str_replace($uploads_dir, '', $image_path);
-        $old_url = wp_get_upload_dir()['baseurl'] . $relative_image_path;
-        $new_url = preg_replace('/\.(jpg|jpeg|png)$/i', '.webp', $old_url);
 
         if (in_array($image_extension, ['jpg', 'jpeg', 'png']) && !file_exists($webp_path)) {
             gnwebpconv_log('Converting image: ' . $image_path);
@@ -418,71 +247,34 @@ function gnwebpconv_do_conversion()
                 $imagick_image->destroy();
             }
 
-            // Update attachment metadata if this image is an attachment
-            $attachment_id = attachment_url_to_postid($old_url);
-            if ($attachment_id) {
-                $attachment_meta = wp_get_attachment_metadata($attachment_id);
+            $attachment_meta = wp_get_attachment_metadata($image->ID);
+            $attachment_meta['sizes']['webp'] = array(
+                'file'      => basename($image_path . '.webp'),
+                'width'     => $attachment_meta['width'],
+                'height'    => $attachment_meta['height'],
+                'mime-type' => 'image/webp',
+            );
+            wp_update_attachment_metadata($image->ID, $attachment_meta);
 
-                foreach ($attachment_meta['sizes'] as $size => $size_info) {
-                    $size_path = dirname($image_path) . '/' . $size_info['file'];
-                    $size_webp_path = preg_replace('/\.(jpg|jpeg|png)$/i', '.webp', $size_path);
-
-                    if (!file_exists($size_webp_path)) {
-                        if ($gnwebpconv_library === 'gd') {
-                            if ($image_extension === 'jpg' || $image_extension === 'jpeg') {
-                                $gd_image = imagecreatefromjpeg($size_path);
-                            } elseif ($image_extension === 'png') {
-                                $gd_image = imagecreatefrompng($size_path);
-                            }
-                            imagewebp($gd_image, $size_webp_path, $gnwebpconv_quality);
-                            imagedestroy($gd_image);
-                        } elseif ($gnwebpconv_library === 'imagick') {
-                            $imagick_image = new Imagick($size_path);
-                            $imagick_image->setImageFormat('webp');
-                            $imagick_image->setImageCompressionQuality($gnwebpconv_quality);
-                            $imagick_image->writeImage($size_webp_path);
-                            $imagick_image->clear();
-                            $imagick_image->destroy();
-                        }
-                    }
-
-                    $attachment_meta['sizes'][$size]['webp'] = array(
-                        'file' => basename($size_webp_path),
-                        'width' => $size_info['width'],
-                        'height' => $size_info['height'],
-                        'mime-type' => 'image/webp',
-                    );
-                }
-
-                wp_update_attachment_metadata($attachment_id, $attachment_meta);
-            }
-
-            // Update references in the database
-            gnwebpconv_update_image_references($old_url, $new_url);
-
-            // Also update relative paths
-            $relative_old_url = str_replace(wp_get_upload_dir()['baseurl'], '', $old_url);
-            $relative_new_url = str_replace(wp_get_upload_dir()['baseurl'], '', $new_url);
-            gnwebpconv_update_image_references($relative_old_url, $relative_new_url);
-
-            if (!$preserve_original) {
-                gnwebpconv_log('Deleting original image: ' . $image_path);
-                unlink($image_path);
-
-                foreach ($attachment_meta['sizes'] as $size_info) {
-                    $size_path = dirname($image_path) . '/' . $size_info['file'];
-                    if (file_exists($size_path)) {
-                        gnwebpconv_log('Deleting original size image: ' . $size_path);
-                        unlink($size_path);
-                    }
-                }
-            }
+            unlink($image_path);
         }
     }
-
-    // Run comprehensive database-wide search and replace
-    gnwebpconv_database_search_replace();
 }
 add_action('gnwebpconv_do_conversion', 'gnwebpconv_do_conversion');
+
+?>
+
+function gnwebpconv_update_post_content($old_url, $new_url)
+{
+    global $wpdb;
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE {$wpdb->posts} SET post_content = REPLACE(post_content, %s, %s)",
+            $old_url,
+            $new_url
+        )
+    );
+}
 
 ?>
